@@ -1,0 +1,10 @@
+# GATK4: read groups, sequence dictionary, HaplotypeCaller, GenomicsDBImport,
+# GenotypeGVCFs, VariantFiltration, IndexFeatureFile.
+# Recreate with:  conda env create -f envs/gatk4.yml
+# The env name MUST stay 'gatk4' -- it is referenced directly in the templates.
+name: gatk4
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - gatk4=4.5.0.0

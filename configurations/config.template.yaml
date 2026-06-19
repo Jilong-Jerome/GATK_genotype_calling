@@ -1,0 +1,55 @@
+# ---------------------------------------------------------------------------
+# GATK joint-genotyping workflow configuration TEMPLATE.
+#
+# Copy this file to a real config that the workflow will pick up:
+#
+#     cp configurations/config.template.yaml configurations/myproject.config.yaml
+#
+# then edit the values below. Only files matching configurations/*.config.yaml
+# are loaded by workflow.py, so this *.template.yaml is never executed.
+# Use ABSOLUTE paths everywhere.
+# ---------------------------------------------------------------------------
+
+# Free-text label for bookkeeping only (not used by the pipeline logic).
+TAG: user:project:gatk_calling
+
+# SLURM account that jobs are charged to (sbatch --account).
+account: YOUR_SLURM_ACCOUNT
+
+# Human-readable project name.
+project_name: my_gatk_calling
+
+# Absolute path to this workflow checkout (where workflow.py lives).
+working_directory_path: /absolute/path/to/GATK_genotype_calling
+
+# Where all results are written. Created automatically. Sub-dirs produced:
+#   index/  align/<sample>/  gvcf/<sample>/  joint/
+output_directory_path: /absolute/path/to/GATK_genotype_calling/steps
+
+# Where per-target .DONE sentinels and sample_map.tsv are written.
+log_directory_path: /absolute/path/to/GATK_genotype_calling/logs
+
+# Absolute path to workflow_sources/ (kept for parity with the project layout).
+scripts_path: /absolute/path/to/GATK_genotype_calling/workflow_sources
+
+# Reference genome FASTA. A matching .fai (see reference_fai) is required; the
+# .dict is created automatically by the gatk_dict target if missing.
+reference_genome: /absolute/path/to/reference/genome.fasta
+
+# Reference .fai index (samtools faidx genome.fasta). Used to enumerate contigs,
+# so it MUST exist before running `gwf status`.
+reference_fai: /absolute/path/to/reference/genome.fasta.fai
+
+# Tab-separated sample sheet: columns sample_id, r1, r2 (absolute FASTQ paths).
+# See sample_sheet.template.tsv.
+sample_sheet: /absolute/path/to/sample_sheet.tsv
+
+# Basename (prefix) for the bwa-mem2 index files written under output/index/.
+index_basename: myref
+
+# Basename of the final merged multi-sample VCF (-> joint/<joint_name>.vcf.gz).
+joint_name: my_joint
+
+# GenomicsDBImport --batch-size. Roughly the number of samples imported at once;
+# lower it if GenomicsDBImport runs out of memory with many samples.
+batch_size: 100

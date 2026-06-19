@@ -1,0 +1,18 @@
+# Workflow outputs and bookkeeping
+steps/
+logs/
+.gwf/
+*.logs/
+
+# Real run configs and sample sheets (keep only the *.template.* files)
+configurations/*.config.yaml
+sample_sheet.tsv
+*.sample_sheet.tsv
+
+# Python
+__pycache__/
+*.pyc
+
+# Keep the shipped templates even though patterns above would catch lookalikes
+!configurations/config.template.yaml
+!sample_sheet.template.tsv

@@ -1,0 +1,10 @@
+# Read alignment with bwa-mem2 (also provides samtools for the align pipe).
+# Recreate with:  conda env create -f envs/bwa2.yml
+# The env name MUST stay 'bwa2' -- it is referenced directly in the templates.
+name: bwa2
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - bwa-mem2=2.2.1
+  - samtools=1.19

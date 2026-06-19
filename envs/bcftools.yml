@@ -1,0 +1,9 @@
+# bcftools: concatenate per-contig (g)VCFs.
+# Recreate with:  conda env create -f envs/bcftools.yml
+# The env name MUST stay 'bcftools' -- it is referenced directly in the templates.
+name: bcftools
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - bcftools=1.16

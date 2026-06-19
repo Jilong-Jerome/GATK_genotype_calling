@@ -1,0 +1,10 @@
+# Sample sheet for the GATK joint-genotyping workflow.
+# Tab-separated. Three columns: sample_id, r1, r2 (absolute paths to paired FASTQ).
+# - The header line below (sample_id/r1/r2) is optional and is skipped if present.
+# - Lines starting with '#' and blank lines are ignored.
+# - sample_id is used as the read-group sample name and in all output paths,
+#   so keep it filename-safe (letters, digits, '_', '-').
+# Copy this file, remove the example rows, and fill in your own.
+sample_id	r1	r2
+# sampleA	/absolute/path/to/sampleA_r1.fq.gz	/absolute/path/to/sampleA_r2.fq.gz
+# sampleB	/absolute/path/to/sampleB_r1.fastq.gz	/absolute/path/to/sampleB_r2.fastq.gz

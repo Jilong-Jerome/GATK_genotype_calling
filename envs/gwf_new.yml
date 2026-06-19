@@ -1,0 +1,12 @@
+# gwf workflow manager -- used to build the DAG and submit jobs to SLURM.
+# Recreate with:  conda env create -f envs/gwf_new.yml
+# You may rename this env freely (it is only used to run `gwf`, not inside any
+# template); the README commands assume 'gwf_new'.
+name: gwf_new
+channels:
+  - gwforg
+  - conda-forge
+  - bioconda
+dependencies:
+  - python=3.12
+  - gwf=2.1.1

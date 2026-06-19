@@ -1,0 +1,9 @@
+# BAM processing (fixmate / sort / markdup / MQ-filter / index) and faidx.
+# Recreate with:  conda env create -f envs/samtools117.yml
+# The env name MUST stay 'samtools117' -- it is referenced directly in the templates.
+name: samtools117
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - samtools=1.17
