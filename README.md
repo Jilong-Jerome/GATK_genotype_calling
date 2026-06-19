@@ -184,7 +184,8 @@ cp configurations/config.template.yaml configurations/myproject.config.yaml
 | `sample_sheet` | Path to the TSV from step 5b. |
 | `index_basename` | Prefix for the bwa-mem2 index files. |
 | `joint_name` | Basename of the final VCF → `joint/<joint_name>.vcf.gz`. |
-| `batch_size` | `GenomicsDBImport --batch-size` (lower it if that step runs out of memory). |
+| `batch_size` | `GenomicsDBImport --batch-size` — number of **samples** read at once (a memory knob, *not* a parallelization setting). Lower it (e.g. 50–100) if joint genotyping runs out of memory with many samples. See [Parallelization](#8-parallelization). |
+| `window_size` | Sub-contig scatter size in bp. `0` = one job per contig (default); `N` = split contigs into `N`-bp windows for finer parallelization. See [Parallelization](#8-parallelization). |
 
 You can drop **multiple** `*.config.yaml` files into `configurations/` (e.g. one
 per species/dataset) and they will all be registered in a single `gwf` graph.
@@ -214,7 +215,7 @@ sentinel) are skipped.
 | `index/<index_basename>.*` | bwa-mem2 index. |
 | `align/<sample>/<sample>_final.bam(.bai)` | Final filtered, dedup'd alignment + `.markdup.stat`. |
 | `gvcf/<sample>/<sample>.g.vcf.gz(.tbi)` | Per-sample GVCF (all contigs). |
-| `joint/<contig>_GATK_filtered.vcf.gz` | Per-contig joint-genotyped + filtered VCF. |
+| `joint/<unit>_GATK_filtered.vcf.gz` | Per-unit joint-genotyped + filtered VCF. `<unit>` is `<contig>` by default, or `<contig>_<start>_<end>` when `window_size > 0`. |
 | `joint/<joint_name>.vcf.gz(.tbi)` | **Final multi-sample VCF.** |
 
 ---
@@ -222,7 +223,9 @@ sentinel) are skipped.
 ## 7. Pipeline details
 
 Each row is a gwf target template in `workflow_sources/workflow_templates.py`.
-Targets fan out per sample (`<sample>_*`) and per contig.
+Targets fan out per sample (`<sample>_*`) and per **calling unit** — a whole contig
+by default, or a window when `window_size > 0` (see [Parallelization](#8-parallelization)).
+`<unit>` below is `<contig>` or `<contig>_<start>_<end>` accordingly.
 
 | Target | Tool(s) | conda env | Cores / Mem / Time | Key parameters |
 |--------|---------|-----------|--------------------|----------------|
@@ -235,12 +238,12 @@ Targets fan out per sample (`<sample>_*`) and per contig.
 | `<s>_markdup` | `samtools markdup -r` | samtools117 | 16 / 32g / 12h | duplicates **removed**; stats → `.markdup.stat` |
 | `<s>_mq` | `samtools view` | samtools117 | 16 / 32g / 12h | `-bq 60 -f 0x2 -F 0x4` (MAPQ ≥ 60, proper pairs, mapped) |
 | `<s>_bai` | `samtools index` | samtools117 | 8 / 8g / 4h | |
-| `<s>_<contig>_gvcf` | `gatk HaplotypeCaller` | gatk4 | 4 / 24g / 36h | `-ERC GVCF`, `-L <contig>`, `-Xmx20g`, scratch tmp |
-| `<s>_gvcf_merge` | `bcftools concat`, `gatk IndexFeatureFile` | bcftools → gatk4 | 6 / 24g / 12h | merges all per-contig GVCFs |
-| `joint_<contig>` | `GenomicsDBImport`, `GenotypeGVCFs`, `VariantFiltration` | gatk4 | 6 / 200g / 24h | `-all-sites`; hard filter (below) |
-| `<joint_name>_concat` | `bcftools concat`, `gatk IndexFeatureFile` | bcftools → gatk4 | 6 / 24g / 12h | final VCF |
+| `<s>_<unit>_gvcf` | `gatk HaplotypeCaller` | gatk4 | 4 / 24g / 36h | `-ERC GVCF`, `-L <unit interval>`, `-Xmx20g`, scratch tmp |
+| `<s>_gvcf_merge` | `bcftools concat`, `gatk IndexFeatureFile` | bcftools → gatk4 | 6 / 24g / 12h | merges all per-unit GVCFs (genomic order) into `<sample>.g.vcf.gz` |
+| `joint_<unit>` | `GenomicsDBImport`, `GenotypeGVCFs`, `VariantFiltration` | gatk4 | 6 / 200g / 24h | `-L <unit interval>`, `-all-sites`; hard filter (below) |
+| `<joint_name>_concat` | `bcftools concat`, `gatk IndexFeatureFile` | bcftools → gatk4 | 6 / 24g / 12h | gathers all units → final VCF |
 
-**Hard-filter expression** (FILTER tag `gatk_germline`, applied in `joint_<contig>`):
+**Hard-filter expression** (FILTER tag `gatk_germline`, applied in `joint_<unit>`):
 
 ```
 QD < 2.0 || MQ < 40.0 || FS > 60.0 || SOR > 3.0 || MQRankSum < -12.5 || ReadPosRankSum < -8.0
@@ -251,7 +254,68 @@ FILTER column so you can subset later (e.g. `bcftools view -f PASS`).
 
 ---
 
-## 8. Customizing
+## 8. Parallelization
+
+The workflow parallelizes by splitting the genome into independent **calling units**,
+each becoming its own HaplotypeCaller job (per sample) and its own joint-genotyping
+job. Two config keys are often confused — they are unrelated:
+
+- **`window_size`** controls *how the genome is split* (the parallelization knob).
+- **`batch_size`** controls *how many samples GenomicsDBImport opens at once* (a
+  memory knob — see below). It does **not** affect parallelization or split the genome.
+
+### Default: one job per contig
+
+With `window_size: 0`, the calling units are the contigs listed in the reference
+`.fai`. A genome with 120 contigs yields 120 joint jobs and `120 × N_samples`
+HaplotypeCaller jobs — already substantial parallelism. The catch: a single
+chromosome-scale contig is one large job (the dolphin reference has contigs up to
+~208 Mb, which is why HaplotypeCaller is given a 36 h walltime).
+
+### Finer: split contigs into windows
+
+Set `window_size` to a bp value to additionally cut every contig into consecutive,
+non-overlapping windows of that size. The unit interval becomes
+`<contig>:<start>-<end>` and outputs/targets are tagged `<contig>_<start>_<end>`.
+
+Approximate job counts (HaplotypeCaller):
+
+```
+units      ≈ Σ_contigs ceil(contig_length / window_size)
+HC jobs    = units × N_samples
+joint jobs = units
+```
+
+Example — a 2.5 Gb genome, 50 samples:
+
+| `window_size` | units (≈) | HaplotypeCaller jobs (≈) |
+|---------------|-----------|--------------------------|
+| `0` (per contig, 120 contigs) | 120 | 6,000 |
+| `20000000` (20 Mb) | ~135 | ~6,800 |
+| `10000000` (10 Mb) | ~260 | ~13,000 |
+| `5000000` (5 Mb) | ~510 | ~25,000 |
+
+Smaller windows = shorter wall-clock per job and better cluster utilization, but
+more SLURM jobs and `.DONE` files (heavier scheduler/filesystem load) and more
+fixed-cost overhead per job. **5–20 Mb** is a sensible range for mammalian-scale
+genomes; only go smaller if individual contigs are genuinely too slow per job.
+
+### Caveats
+
+- **Boundary effects.** Windows are *unpadded*, so HaplotypeCaller assembles each
+  window without flanking reads from the neighbour. Variants near a window edge can
+  in rare cases be called slightly differently than under whole-contig calling.
+  Because the joint step uses the same non-overlapping windows, there is **no
+  double-calling** in the final VCF. For maximum sensitivity at edges, use larger
+  windows or per-contig (`window_size: 0`).
+- **`batch_size` is not parallelization.** `GenomicsDBImport --batch-size` is the
+  number of samples whose GVCF readers are open simultaneously (GATK default `0` =
+  all at once). Lower it only to reduce memory with very large cohorts; it has no
+  effect on how the genome is split.
+
+---
+
+## 9. Customizing
 
 All of the following live in `workflow_sources/workflow_templates.py`:
 
@@ -265,7 +329,9 @@ All of the following live in `workflow_sources/workflow_templates.py`:
   variant sites only.
 - **Scratch path** — change the `/scratch/$SLURM_JOBID/` `--tmp-dir` paths if your
   cluster differs.
-- **batch_size** — set in the config (`GenomicsDBImport --batch-size`).
+- **Parallelization granularity** — set `window_size` in the config (see
+  [Parallelization](#8-parallelization)).
+- **batch_size** — set in the config; controls GenomicsDBImport memory, not splitting.
 
 The four tool conda-env names (`bwa2`, `samtools117`, `gatk4`, `bcftools`) are
 hard-coded in the templates. If you must rename an env, update the matching
@@ -273,7 +339,7 @@ hard-coded in the templates. If you must rename an env, update the matching
 
 ---
 
-## 9. Troubleshooting
+## 10. Troubleshooting
 
 - **`gwf status` errors about a missing `.fai`** — run `samtools faidx` on the
   reference first (step 5a); the contig list is read from it at graph-build time.
@@ -282,7 +348,7 @@ hard-coded in the templates. If you must rename an env, update the matching
   resubmitted.
 - **Force a rerun** — delete the corresponding `logs/<target>.DONE` sentinel (and
   any stale output), then `gwf run`.
-- **GenomicsDBImport OOM** — lower `batch_size`, or raise the `joint_<contig>`
+- **GenomicsDBImport OOM** — lower `batch_size`, or raise the `joint_<unit>`
   memory in the template.
 - **Out of scratch space** — point `--tmp-dir` at a larger scratch filesystem.
 - **Config not picked up** — it must match `configurations/*.config.yaml`
@@ -290,7 +356,7 @@ hard-coded in the templates. If you must rename an env, update the matching
 
 ---
 
-## 10. Tools used
+## 11. Tools used
 
 [bwa-mem2](https://github.com/bwa-mem2/bwa-mem2) ·
 [samtools](https://www.htslib.org/) ·

@@ -50,6 +50,17 @@ index_basename: myref
 # Basename of the final merged multi-sample VCF (-> joint/<joint_name>.vcf.gz).
 joint_name: my_joint
 
-# GenomicsDBImport --batch-size. Roughly the number of samples imported at once;
-# lower it if GenomicsDBImport runs out of memory with many samples.
+# GenomicsDBImport --batch-size: the number of SAMPLES whose GVCF readers are open
+# at once. This is a MEMORY knob, NOT a contig/parallelization setting. GATK's
+# default is 0 (open all samples at once); set a smaller value (e.g. 50-100) to cap
+# memory when you have many samples, at the cost of some speed.
 batch_size: 100
+
+# Parallelization granularity (in bp). Controls how the genome is split into
+# independent HaplotypeCaller + joint-genotyping jobs.
+#   0  -> one job per whole contig (default; the genome is split by the .fai contigs).
+#   N  -> additionally split each contig into N-bp windows, giving many more, smaller
+#         parallel jobs ("massive parallelization"). E.g. 10000000 = 10 Mb windows.
+# Higher job counts shorten wall-clock time but add scheduler load; see the README
+# "Parallelization" section for trade-offs and the boundary caveat.
+window_size: 0

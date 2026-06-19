@@ -19,10 +19,43 @@ from workflow_templates import (
 from sample_map_writer import write_sample_map
 
 
-def _read_chroms(fai_path):
-    """Return the ordered list of contig names from a .fai index."""
+def _read_contigs(fai_path):
+    """Return an ordered list of (contig_name, length) from a .fai index."""
+    contigs = []
     with open(fai_path) as f:
-        return [line.split('\t')[0] for line in f if line.strip()]
+        for line in f:
+            if not line.strip():
+                continue
+            fields = line.split('\t')
+            contigs.append((fields[0], int(fields[1])))
+    return contigs
+
+
+def _make_units(fai_path, window_size):
+    """Build the list of calling units (genomic intervals to parallelize over).
+
+    Each unit is a (tag, interval, name_safe) tuple where:
+      - tag       : token used in output filenames / .DONE sentinels.
+      - interval  : value passed to GATK -L.
+      - name_safe : token used in gwf target names ('.' is not target-name safe).
+
+    window_size <= 0 -> one unit per whole contig (the default, contig-level
+    parallelization). window_size > 0 -> each contig is split into consecutive
+    non-overlapping windows of at most window_size bp (1-based, inclusive),
+    yielding many small units for finer ("massive") parallelization.
+    """
+    units = []
+    for contig, length in _read_contigs(fai_path):
+        if window_size and window_size > 0:
+            start = 1
+            while start <= length:
+                end = min(start + window_size - 1, length)
+                tag = f'{contig}_{start}_{end}'
+                units.append((tag, f'{contig}:{start}-{end}', tag.replace('.', '_')))
+                start = end + 1
+        else:
+            units.append((contig, contig, contig.replace('.', '_')))
+    return units
 
 
 def _read_sample_sheet(path):
@@ -73,11 +106,13 @@ def gatk_calling_workflow(config_file, gwf):
     basename = cfg['index_basename']
     joint_name = cfg['joint_name']
     batch_size = cfg['batch_size']
+    window_size = cfg.get('window_size', 0)
 
     samples = _read_sample_sheet(sample_sheet)
     individuals = [s[0] for s in samples]
 
-    chroms = _read_chroms(cfg['reference_fai'])
+    units = _make_units(cfg['reference_fai'], window_size)
+    tags = [u[0] for u in units]
 
     index_dir = os.path.join(out_root, 'index')
     index_prefix = os.path.join(index_dir, basename)
@@ -129,33 +164,31 @@ def gatk_calling_workflow(config_file, gwf):
             name=f'{ind}_bai',
             template=samtools_index(ind, ind_align_dir, log_path, account),
         )
-        for chrom in chroms:
-            safe_chrom = chrom.replace('.', '_')
+        for tag, interval, name_safe in units:
             gwf.target_from_template(
-                name=f'{ind}_{safe_chrom}_gvcf',
+                name=f'{ind}_{name_safe}_gvcf',
                 template=gatk_haplotype_call(
-                    ind, chrom, ref, final_bam, ind_gvcf_dir, log_path, account
+                    ind, tag, interval, ref, final_bam, ind_gvcf_dir, log_path, account
                 ),
             )
         gwf.target_from_template(
             name=f'{ind}_gvcf_merge',
-            template=merge_gvcf_by_chrom(ind, chroms, ind_gvcf_dir, log_path, account),
+            template=merge_gvcf_by_chrom(ind, tags, ind_gvcf_dir, log_path, account),
         )
 
     sample_map = write_sample_map(log_path, individuals, gvcf_root)
 
-    for chrom in chroms:
-        safe_chrom = chrom.replace('.', '_')
+    for tag, interval, name_safe in units:
         gwf.target_from_template(
-            name=f'joint_{safe_chrom}',
+            name=f'joint_{name_safe}',
             template=gatk_consolidate(
-                chrom, individuals, ref, joint_dir, sample_map, log_path, batch_size, account
+                tag, interval, individuals, ref, joint_dir, sample_map, log_path, batch_size, account
             ),
         )
 
     gwf.target_from_template(
         name=f'{joint_name}_concat',
-        template=merge_vcfs(chroms, joint_dir, joint_name, log_path, account),
+        template=merge_vcfs(tags, joint_dir, joint_name, log_path, account),
     )
 
     return gwf

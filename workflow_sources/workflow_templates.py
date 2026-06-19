@@ -176,12 +176,12 @@ def samtools_index(indname, out_dir, log_path, account):
     return AnonymousTarget(inputs=inputs, outputs=outputs, options=options, spec=spec)
 
 
-def gatk_haplotype_call(indname, chrom, ref, bam_path, gvcf_dir, log_path, account):
+def gatk_haplotype_call(indname, tag, interval, ref, bam_path, gvcf_dir, log_path, account):
     inputs = [
         f'{log_path}/{indname}_bai_s6.DONE',
         f'{log_path}/gatk_dict.DONE',
     ]
-    outputs = [f'{log_path}/{indname}_{chrom}_gvcf.DONE']
+    outputs = [f'{log_path}/{indname}_{tag}_gvcf.DONE']
     options = {'cores': 4, 'memory': '24g', 'walltime': '36:00:00', 'account': account}
     spec = f"""
     CONDA_BASE=$(conda info --base)
@@ -194,8 +194,8 @@ def gatk_haplotype_call(indname, chrom, ref, bam_path, gvcf_dir, log_path, accou
     gatk --java-options "-Xmx20g" HaplotypeCaller \\
         -R {ref} \\
         -I {bam_path} \\
-        -O {indname}_{chrom}.g.vcf.gz \\
-        -L {chrom} \\
+        -O {indname}_{tag}.g.vcf.gz \\
+        -L {interval} \\
         -ERC GVCF \\
         --tmp-dir /scratch/$SLURM_JOBID/ \\
         --native-pair-hmm-threads 4
@@ -205,11 +205,11 @@ def gatk_haplotype_call(indname, chrom, ref, bam_path, gvcf_dir, log_path, accou
     return AnonymousTarget(inputs=inputs, outputs=outputs, options=options, spec=spec)
 
 
-def merge_gvcf_by_chrom(indname, chrom_list, gvcf_dir, log_path, account):
-    inputs = [f'{log_path}/{indname}_{c}_gvcf.DONE' for c in chrom_list]
+def merge_gvcf_by_chrom(indname, tags, gvcf_dir, log_path, account):
+    inputs = [f'{log_path}/{indname}_{c}_gvcf.DONE' for c in tags]
     outputs = [f'{log_path}/{indname}_gvcf_merged.DONE']
     options = {'cores': 6, 'memory': '24g', 'walltime': '12:00:00', 'account': account}
-    concat = ' '.join(f'{gvcf_dir}/{indname}_{c}.g.vcf.gz' for c in chrom_list)
+    concat = ' '.join(f'{gvcf_dir}/{indname}_{c}.g.vcf.gz' for c in tags)
     spec = f"""
     CONDA_BASE=$(conda info --base)
     source $CONDA_BASE/etc/profile.d/conda.sh
@@ -226,9 +226,9 @@ def merge_gvcf_by_chrom(indname, chrom_list, gvcf_dir, log_path, account):
     return AnonymousTarget(inputs=inputs, outputs=outputs, options=options, spec=spec)
 
 
-def gatk_consolidate(chrom, individuals, ref, vcf_dir, sample_map, log_path, batch_size, account):
+def gatk_consolidate(tag, interval, individuals, ref, vcf_dir, sample_map, log_path, batch_size, account):
     inputs = [f'{log_path}/{ind}_gvcf_merged.DONE' for ind in individuals]
-    outputs = [f'{log_path}/joint_{chrom}.DONE']
+    outputs = [f'{log_path}/joint_{tag}.DONE']
     options = {'cores': 6, 'memory': '200g', 'walltime': '24:00:00', 'account': account}
     spec = f"""
     CONDA_BASE=$(conda info --base)
@@ -238,24 +238,24 @@ def gatk_consolidate(chrom, individuals, ref, vcf_dir, sample_map, log_path, bat
     echo "JobID: $SLURM_JOBID"
     mkdir -p {vcf_dir}
     gatk --java-options "-Xmx60g -Xms60g" GenomicsDBImport \\
-        --genomicsdb-workspace-path /scratch/$SLURM_JOBID/db_{chrom} \\
+        --genomicsdb-workspace-path /scratch/$SLURM_JOBID/db_{tag} \\
         --batch-size {batch_size} \\
         --sample-name-map {sample_map} \\
         --tmp-dir /scratch/$SLURM_JOBID/ \\
         --reader-threads 6 \\
-        -L {chrom} \\
+        -L {interval} \\
         --genomicsdb-shared-posixfs-optimizations true \\
         --genomicsdb-vcf-buffer-size 4194304
     gatk --java-options "-Xmx60g -Xms60g" GenotypeGVCFs \\
         -R {ref} \\
-        -V gendb:///scratch/$SLURM_JOBID/db_{chrom} \\
+        -V gendb:///scratch/$SLURM_JOBID/db_{tag} \\
         --tmp-dir /scratch/$SLURM_JOBID/ \\
-        -O /scratch/$SLURM_JOBID/{chrom}.vcf.gz \\
-        -L {chrom} \\
+        -O /scratch/$SLURM_JOBID/{tag}.vcf.gz \\
+        -L {interval} \\
         -all-sites true
     gatk --java-options "-Xmx60g -Xms60g" VariantFiltration \\
-        -V /scratch/$SLURM_JOBID/{chrom}.vcf.gz \\
-        -O {vcf_dir}/{chrom}_GATK_filtered.vcf.gz \\
+        -V /scratch/$SLURM_JOBID/{tag}.vcf.gz \\
+        -O {vcf_dir}/{tag}_GATK_filtered.vcf.gz \\
         --filter-name "gatk_germline" \\
         --tmp-dir /scratch/$SLURM_JOBID/ \\
         --filter-expression "QD < 2.0 || MQ < 40.0 || FS > 60.0 || SOR > 3.0 || MQRankSum < -12.5 || ReadPosRankSum < -8.0" \\
@@ -266,11 +266,11 @@ def gatk_consolidate(chrom, individuals, ref, vcf_dir, sample_map, log_path, bat
     return AnonymousTarget(inputs=inputs, outputs=outputs, options=options, spec=spec)
 
 
-def merge_vcfs(chrom_list, vcf_dir, joint_name, log_path, account):
-    inputs = [f'{log_path}/joint_{c}.DONE' for c in chrom_list]
+def merge_vcfs(tags, vcf_dir, joint_name, log_path, account):
+    inputs = [f'{log_path}/joint_{c}.DONE' for c in tags]
     outputs = [f'{log_path}/{joint_name}_concat.DONE']
     options = {'cores': 6, 'memory': '24g', 'walltime': '12:00:00', 'account': account}
-    concat = ' '.join(f'{vcf_dir}/{c}_GATK_filtered.vcf.gz' for c in chrom_list)
+    concat = ' '.join(f'{vcf_dir}/{c}_GATK_filtered.vcf.gz' for c in tags)
     spec = f"""
     CONDA_BASE=$(conda info --base)
     source $CONDA_BASE/etc/profile.d/conda.sh
